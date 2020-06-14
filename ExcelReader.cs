@@ -11,8 +11,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace ActOfProvidedServices {
-	class ExcelReader {
+namespace CleanedTreatmentsDetailsImport {
+	public class ExcelReader {
 		static public DataTable ReadExcelFile(string fileName, string sheetName) {
 			Logging.ToLog("Считывание книги: " + fileName + ", лист: " + sheetName);
 			DataTable dataTable = new DataTable();
@@ -51,6 +51,31 @@ namespace ActOfProvidedServices {
 			}
 
 			return dataTable;
+		}
+
+
+		public static List<string> ReadSheetNames(string file) {
+			List<string> sheetNames = new List<string>();
+
+			using (OleDbConnection conn = new OleDbConnection()) {
+				conn.ConnectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" + file + ";Mode=Read;" +
+					"Extended Properties='Excel 12.0 Xml;HDR=NO;'";
+
+				using (OleDbCommand comm = new OleDbCommand()) {
+					conn.Open();
+					DataTable dtSchema = conn.GetOleDbSchemaTable(OleDbSchemaGuid.Tables,
+						new object[] { null, null, null, "TABLE" });
+					foreach (DataRow row in dtSchema.Rows) {
+						string name = row.Field<string>("TABLE_NAME");
+						if (name.Contains("FilterDatabase"))
+							continue;
+
+						sheetNames.Add(name.Replace("$", "").TrimStart('\'').TrimEnd('\''));
+					}
+				}
+			}
+
+			return sheetNames;
 		}
 	}
 }

@@ -6,12 +6,15 @@ using System.Threading.Tasks;
 using System.Data.SqlClient;
 using Vertica.Data.VerticaClient;
 using System.Data;
+using System.Runtime.Remoting.Messaging;
+using System.ComponentModel;
 
 namespace CleanedTreatmentsDetailsImport {
-	class VerticaClient {
-		private VerticaConnection connection;
+	public class VerticaClient {
+		private readonly VerticaConnection connection;
+		private readonly BackgroundWorker bw;
 
-		public VerticaClient(string host, string database, string user, string password) {
+		public VerticaClient(string host, string database, string user, string password, BackgroundWorker bw = null) {
 			VerticaConnectionStringBuilder builder = new VerticaConnectionStringBuilder {
 				Host = host,
 				Database = database,
@@ -19,6 +22,7 @@ namespace CleanedTreatmentsDetailsImport {
 				Password = password
 			};
 
+			this.bw = bw;
 			connection = new VerticaConnection(builder.ToString());
 			IsConnectionOpened();
 		}
@@ -32,6 +36,9 @@ namespace CleanedTreatmentsDetailsImport {
 					string body = e.Message + Environment.NewLine + e.StackTrace;
 					SystemMail.SendMail(subject, body, Properties.Settings.Default.MailCopy);
 					Logging.ToLog(subject + " " + body);
+
+					if (bw != null)
+						bw.ReportProgress(0, subject + " " + body);
 				}
 			}
 
@@ -59,16 +66,19 @@ namespace CleanedTreatmentsDetailsImport {
 				SystemMail.SendMail(subject, body, Properties.Settings.Default.MailCopy);
 				Logging.ToLog(subject + " " + body);
 				connection.Close();
+
+				if (bw != null)
+					bw.ReportProgress(0, subject + " " + body);
 			}
 
 			return dataTable;
 		}
 
 		public bool ExecuteUpdateQuery(
-						string query, Dictionary<Tuple<string, string, string, Program.FieldType>, 
-						List<object>> headersAndData, 
+						string query, 
+						DataTable dataTable, 
 						string fileInfo) {
-			if (headersAndData == null)
+			if (dataTable == null)
 				return false;
 
 			bool updatedCorrected = true;
@@ -80,15 +90,16 @@ namespace CleanedTreatmentsDetailsImport {
 
 			using (VerticaTransaction transaction = connection.BeginTransaction()) {
 				using (VerticaCommand update = new VerticaCommand(query, connection)) {
-					for (int i = 0; i < headersAndData.First().Value.Count; i++) {
+					for (int i = 0; i < dataTable.Rows.Count; i++) {
 						try {
 							update.Parameters.Clear();
 
-							foreach (Tuple<string, string, string, Program.FieldType> header in headersAndData.Keys)
-								update.Parameters.Add(new VerticaParameter(header.Item3, headersAndData[header][i]));
+							foreach (Program.Header header in Program.headers)
+								update.Parameters.Add(new VerticaParameter(header.DbField, dataTable.Rows[i][header.DbField]));
 
 							update.Parameters.Add(new VerticaParameter("@etl_pipeline_id", "CleanedTreatmentsDetailsImport" + "_" + now));
 							update.Parameters.Add(new VerticaParameter("@file_info", fileInfo));
+							update.Parameters.Add(new VerticaParameter("@loadingUserName", Environment.UserName + "@" + Environment.MachineName));
 
 							if (update.ExecuteNonQuery() == 0)
 								updatedCorrected = false;
@@ -98,12 +109,16 @@ namespace CleanedTreatmentsDetailsImport {
 							SystemMail.SendMail(subject, body, Properties.Settings.Default.MailCopy);
 							Logging.ToLog(subject + " " + body);
 
+							if (bw != null)
+								bw.ReportProgress(0, subject + " " + body);
+
 							Logging.ToLog("---Исходные данные:");
-							foreach (Tuple<string, string, string, Program.FieldType> header in headersAndData.Keys)
-								Logging.ToLog(header.Item3 + " | " + (headersAndData[header][i] == null ? "null" : headersAndData[header][i].ToString()));
+							foreach (Program.Header header in Program.headers)
+								Logging.ToLog(header.DbField + " | " + (dataTable.Rows[i][header.DbField] == null ? "null" : dataTable.Rows[i][header.DbField].ToString()));
 
 							transaction.Rollback();
 							connection.Close();
+
 							return false;
 						}
 					}

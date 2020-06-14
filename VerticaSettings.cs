@@ -5,14 +5,35 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace CleanedTreatmentsDetailsImport {
-	class VerticaSettings {
+	public class VerticaSettings {
 		public static string host = Properties.Settings.Default.VerticaHost;
 		public static string database = Properties.Settings.Default.VerticaDatabase;
 		public static string user = Properties.Settings.Default.VerticaUser;
 		public static string password = Properties.Settings.Default.VerticaPassword;
 
-		public static string sqlInsert = 
-			"insert into public.treatments_details_cleaned ( " +
+		public static string sqlGetData = 
+			"select " +
+			"	mfo.ordtid, " +
+			"	mfo.treatcode, " +
+			"	mfo.treat_nctrdate, " +
+			"	mfo.schid, " +
+			"	mfo.tooth_name, " +
+			"	cl.fullname as client, " +
+			"	mfoc.etl_insert_time, " +
+			"	mfoc.file_info, " +
+			"	mfoc.loadingUserName, " +
+			"   mfo.schcount, " +
+			"   mfo.schamount " +
+			"from mis_fact_orderdet mfo " +
+			"left join mis_dim_clients cl on cl.pcode = mfo.pcode " +
+			"left join mis_fact_orderdet_cleaned mfoc on mfoc.ordtid = mfo.ordtid " +
+			"where mfo.jpagreement_agrid in (@jids) " +
+			"and (treat_nctrdate between @dateBegin and @dateEnd) " +
+			"and (doctype = 5 or doctype = 11)";
+
+		public static string sqlInsert =
+			"insert into public.mis_fact_orderdet_cleaned ( " +
+			"    ordtid, " +
 			"    contract, " +
 			"    program, " +
 			"    policy, " +
@@ -57,9 +78,11 @@ namespace CleanedTreatmentsDetailsImport {
 			"    garant_letter, " +
 			"    category, " +
 			"    etl_pipeline_id, " +
-			"    file_info " +
+			"    file_info, " +
+			"    loadingUserName " +
 			") " +
 			"values ( " +
+			"    @ordtid, " +
 			"    @contract, " +
 			"    @program, " +
 			"    @policy, " +
@@ -104,7 +127,10 @@ namespace CleanedTreatmentsDetailsImport {
 			"    @garant_letter, " +
 			"    @category, " +
 			"    @etl_pipeline_id, " +
-			"    @file_info " +
+			"    @file_info, " +
+			"    @loadingUserName " +
 			")";
+
+		public static string sqlRefresh = "select refresh_columns('mis_fact_orderdet', 'schcount_cleaned, schamount_cleaned', 'rebuild');";
 	}
 }
