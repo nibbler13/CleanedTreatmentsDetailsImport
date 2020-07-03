@@ -11,7 +11,7 @@ namespace CleanedTreatmentsDetailsImport {
 		public static string user = Properties.Settings.Default.VerticaUser;
 		public static string password = Properties.Settings.Default.VerticaPassword;
 
-		public static string sqlGetData = 
+		public static string sqlGetDataTreatmentsDetails = 
 			"select " +
 			"	mfo.ordtid, " +
 			"	mfo.treatcode, " +
@@ -31,7 +31,7 @@ namespace CleanedTreatmentsDetailsImport {
 			"and (treat_nctrdate between @dateBegin and @dateEnd) " +
 			"and (doctype = 5 or doctype = 11)";
 
-		public static string sqlInsert =
+		public static string sqlInsertTreatmentsDetails =
 			"insert into public.mis_fact_orderdet_cleaned ( " +
 			"    ordtid, " +
 			"    contract, " +
@@ -131,6 +131,40 @@ namespace CleanedTreatmentsDetailsImport {
 			"    @loadingUserName " +
 			")";
 
-		public static string sqlRefresh = "select refresh_columns('mis_fact_orderdet', 'schcount_cleaned, schamount_cleaned', 'rebuild');";
+		public static string sqlInsertProfitAndLoss =
+			"insert into public.profit_and_loss ( " +
+			"    object_name, " +
+			"    period_year, " +
+			"    period_type, " +
+			"    group_name_level_1, " +
+			"    group_name_level_2, " +
+			"    group_name_level_3, " +
+			"    value, " +
+			"    group_sorting_order, " +
+			"    object_sorting_order, " +
+			"    quarter, " +
+			"    has_data, " +
+			"    etl_pipeline_id, " +
+			"    file_info, " +
+			"    loading_user_name " +
+			") " +
+			"values ( " +
+			"    @object_name, " +
+			"    @period_year, " +
+			"    @period_type, " +
+			"    @group_name_level_1, " +
+			"    @group_name_level_2, " +
+			"    @group_name_level_3, " +
+			"    @value, " +
+			"    @group_sorting_order, " +
+			"    @object_sorting_order, " +
+			"    @quarter, " +
+			"    @has_data, " +
+			"    @etl_pipeline_id, " +
+			"    @file_info, " +
+			"    @loading_user_name " +
+			")";
+
+		public static string sqlRefreshOrderdet = "select refresh_columns('mis_fact_orderdet', 'schcount_cleaned, schamount_cleaned', 'rebuild');";
 	}
 }

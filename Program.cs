@@ -63,7 +63,23 @@ namespace CleanedTreatmentsDetailsImport {
 			new Header("F44", "идентификатор строки (ordtid)",                        "ordtid",                                   typeof(long),       false)
 		};
 
-		public static DataTable FileContent = new DataTable();
+		private static readonly Dictionary<int, string> months = new Dictionary<int, string> {
+			{ 1, "01 Январь" },
+			{ 2, "02 Февраль" },
+			{ 3, "03 Март" },
+			{ 4, "04 Апрель" },
+			{ 5, "05 Май" },
+			{ 6, "06 Июнь" },
+			{ 7, "07 Июль" },
+			{ 8, "08 Август" },
+			{ 9, "09 Сентябрь" },
+			{ 10, "10 Октябрь" },
+			{ 11, "11 Ноябрь" },
+			{ 12, "12 Декабрь" }
+		};
+
+		public static DataTable FileContentTreatmentsDetails = new DataTable();
+		public static List<ItemProfitAndLoss> FileContentProfitAndLoss = new List<ItemProfitAndLoss>();
 
 		public class Header {
 			public string ColumnKey { get; }
@@ -118,7 +134,7 @@ namespace CleanedTreatmentsDetailsImport {
 			foreach (string file in files) {
 				try {
 					Logging.ToLog("Файл: " + file + ", лист: " + sheetName);
-					string fileResult = ReadFileContent(file, sheetName, out string fileInfo);
+					string fileResult = ReadTreatmentsDetailsFileContent(file, sheetName, out string fileInfo);
 					if (!fileResult.Contains("ошибок: 0"))
 						continue;
 
@@ -129,7 +145,7 @@ namespace CleanedTreatmentsDetailsImport {
 						VerticaSettings.user,
 						VerticaSettings.password);
 
-					bool isUpdatedCorrected = verticaClient.ExecuteUpdateQuery(VerticaSettings.sqlInsert, FileContent, fileInfo);
+					bool isUpdatedCorrected = verticaClient.ExecuteUpdateQuery(VerticaSettings.sqlInsertTreatmentsDetails, true, fileInfo);
 					fileResult += "; Загрузка в БД: " + (isUpdatedCorrected ? "Успешно" : "С ошибками");
 					filesToImport[file] = fileResult;
 				} catch (Exception e) {
@@ -198,13 +214,219 @@ namespace CleanedTreatmentsDetailsImport {
 			return pathArchive;
 		}
 
-		public static string ReadFileContent(string file, string sheetName, out string fileInfo, System.ComponentModel.BackgroundWorker bw = null) {
+		public static string ReadProfitAndLossLFileContent(string file, string sheetName, out string fileInfo, BackgroundWorker bw = null) {
+			fileInfo = "Unavailable";
+
+			DataTable dataTable = ExcelReader.ReadExcelFile(file, sheetName);
+			
+			if (dataTable == null || dataTable.Rows.Count == 0) {
+				string message = "Не удалось считать файл / нет данных";
+				filesToImport[file] = message;
+				Logging.ToLog(message);
+				return message;
+			}
+
+			string msg = "Считывание свойств файла";
+			Logging.ToLog(msg);
+			if (bw != null)
+				bw.ReportProgress(0, msg);
+
+			try {
+				ShellPropertyCollection properties = new ShellPropertyCollection(file);
+				string lastAuthor = properties["System.Document.LastAuthor"].ValueAsObject.ToString();
+				string dateSaved = properties["System.Document.DateSaved"].ValueAsObject.ToString();
+				string computerName = properties["System.ComputerName"].ValueAsObject.ToString();
+				fileInfo = Path.GetFileName(file) + "@" + lastAuthor + "@" + dateSaved + "@" + computerName;
+			} catch (Exception e) {
+				Logging.ToLog(e.Message + Environment.NewLine + e.StackTrace);
+			}
+
+			msg = "Разбор содержимого строк";
+			Logging.ToLog(msg);
+			if (bw != null)
+				bw.ReportProgress(0, msg);
+
+			int errorCounter = 0;
+
+			int hasDataRow = 0;
+			int quarterRow = 1;
+			int objectNameRow = 2;
+			int dateRow = 3;
+			int firstDataRow = 4;
+
+			int firstDataColumn = 3;
+
+			if (dataTable.Rows.Count < firstDataRow + 1) {
+				msg = "Формат таблицы не соответствует ожидаемому (кол-во строк меньше необходимого - " + (firstDataRow + 1) + ")";
+				Logging.ToLog(msg);
+				if (bw != null)
+					bw.ReportProgress(0, msg);
+
+				return msg;
+			}
+
+			msg = "Считывание строки, содержащей даты";
+			Logging.ToLog(msg);
+			if (bw != null)
+				bw.ReportProgress(0, msg);
+
+			int year = -1;
+			DataRow dataRowDates = dataTable.Rows[dateRow];
+			List<string> dates = new List<string>();
+			foreach (object item in dataRowDates.ItemArray) {
+				if (item == null || string.IsNullOrEmpty(item.ToString()) || string.IsNullOrWhiteSpace(item.ToString())) {
+					dates.Add(string.Empty);
+					continue;
+				}
+
+				if (double.TryParse(item.ToString(), out double result)) { 
+					if (result > 2000 && result < 2030) {
+						dates.Add(item.ToString());
+						if (year == -1)
+							year = (int)result;
+					} else {
+						try {
+							DateTime dt = DateTime.FromOADate(result);
+							dates.Add(months[dt.Month]);
+
+							if (year == -1)
+								year = dt.Year;
+						} catch (Exception exc) {
+							dates.Add(string.Empty);
+							Logging.ToLog(exc.Message + Environment.NewLine + exc.StackTrace);
+						}
+					}
+				} else {
+					if (DateTime.TryParse(item.ToString(), out DateTime dt)) {
+						dates.Add(months[dt.Month]);
+
+						if (year == -1)
+							year = dt.Year;
+					} else {
+						dates.Add(item.ToString());
+					}
+				}
+			}
+
+			if (year == -1) {
+				msg = "Не удалось определить год в загруженном файле, поиск по строке: " + (dateRow + 1);
+				Logging.ToLog(msg);
+				if (bw != null)
+					bw.ReportProgress(0, msg);
+
+				return msg;
+			}
+
+			string groupNameLevel1 = null;
+			string groupNameLevel2 = null;
+
+			for (int i = firstDataRow; i < dataTable.Rows.Count; i++) {
+				msg = "Строка: " + (i + 1) + " / " + dataTable.Rows.Count;
+				Logging.ToLog(msg);
+				if (bw != null)
+					bw.ReportProgress(0, msg);
+
+				DataRow dataRow = dataTable.Rows[i];
+
+				try {
+					string rowGroupNameLevel1 = dataRow[0].ToString();
+					string rowGroupNameLevel2 = dataRow[1].ToString();
+					string rowGroupNameLevel3 = dataRow[2].ToString();
+
+					string rowGroupNameTotal = rowGroupNameLevel1 + rowGroupNameLevel2 + rowGroupNameLevel3;
+					if (string.IsNullOrEmpty(rowGroupNameTotal) ||
+						string.IsNullOrWhiteSpace(rowGroupNameTotal)) {
+						msg = "Отсуютствую заголовки групп, пропуск";
+						Logging.ToLog(msg);
+						if (bw != null)
+							bw.ReportProgress(0, msg);
+
+						groupNameLevel1 = null;
+						groupNameLevel2 = null;
+
+						continue;
+					}
+
+					if (string.IsNullOrEmpty(rowGroupNameLevel3) ||
+						string.IsNullOrWhiteSpace(rowGroupNameLevel3))
+						rowGroupNameLevel3 = null;
+
+					if (!string.IsNullOrEmpty(rowGroupNameLevel1) &&
+						!string.IsNullOrWhiteSpace(rowGroupNameLevel1)) {
+						groupNameLevel1 = rowGroupNameLevel1;
+						groupNameLevel2 = null;
+					}
+
+					if (!string.IsNullOrEmpty(rowGroupNameLevel2) ||
+						!string.IsNullOrWhiteSpace(rowGroupNameLevel2))
+						groupNameLevel2 = rowGroupNameLevel2;
+
+					for (int x = firstDataColumn; x < dataRow.ItemArray.Length; x++) {
+						if (dataRow[x] == null || string.IsNullOrEmpty(dataRow[x].ToString()) || string.IsNullOrWhiteSpace(dataRow[x].ToString()))
+							continue;
+
+						string objectName = dataTable.Rows[objectNameRow][x].ToString();
+						if (string.IsNullOrEmpty(objectName) || string.IsNullOrWhiteSpace(objectName)) {
+							if (string.IsNullOrEmpty(dates[x]))
+								continue;
+							else
+								objectName = "Не указано";
+						}
+
+						if (double.TryParse(dataRow[x].ToString(), out double result)) {
+							ItemProfitAndLoss item = new ItemProfitAndLoss {
+								ObjectName = dataTable.Rows[objectNameRow][x].ToString(),
+								PeriodYear = year,
+								PeriodType = dates[x],
+								GroupNameLevel1 = groupNameLevel1,
+								GroupNameLevel2 = groupNameLevel2,
+								GroupNameLevel3 = rowGroupNameLevel3,
+								Value = result,
+								GroupSortingOrder = i + 1,
+								ObjectSrotingOrder = x + 1
+							};
+
+							string quarter = dataTable.Rows[quarterRow][x].ToString();
+							if (int.TryParse(quarter, out int resultQuarter))
+								if (resultQuarter != 0)
+									item.Quarter = resultQuarter;
+
+							string hasData = dataTable.Rows[hasDataRow][x].ToString();
+							if (int.TryParse(hasData, out int resultHasData))
+								if (!string.IsNullOrEmpty(hasData) && !string.IsNullOrWhiteSpace(hasData))
+									item.HasData = resultHasData == 4;
+
+							FileContentProfitAndLoss.Add(item);
+						} else {
+							msg = "Не удалось преобразовать в число значение в столбце " + (x + 1) + " - '" + dataRow[x] + "'";
+							Logging.ToLog(msg);
+							if (bw != null)
+								bw.ReportProgress(0, msg);
+
+							errorCounter++;
+							continue;
+						}
+					}
+				} catch (Exception e) {
+					if (bw != null)
+						bw.ReportProgress(0, "Строка: " + (i + 1) + ", " + e.Message);
+
+					errorCounter++;
+				}
+			}
+
+			string fileResult = "Считано объектов: " + FileContentProfitAndLoss.Count + ", ошибок: " + errorCounter;
+			Logging.ToLog(fileResult);
+			return fileResult;
+		}
+
+		public static string ReadTreatmentsDetailsFileContent(string file, string sheetName, out string fileInfo, BackgroundWorker bw = null) {
 			fileInfo = "Unavailable";
 
 			Logging.ToLog("Подготовка таблицы для записи считанных данных");
-			FileContent = new DataTable();
+			FileContentTreatmentsDetails = new DataTable();
 			foreach (Header header in headers)
-				FileContent.Columns.Add(header.DbField, header.FieldType);
+				FileContentTreatmentsDetails.Columns.Add(header.DbField, header.FieldType);
 
 			DataTable dataTable = ExcelReader.ReadExcelFile(file, sheetName);
 
@@ -216,7 +438,7 @@ namespace CleanedTreatmentsDetailsImport {
 				return message;
 			}
 
-			int firstDataRow = GetFirstDataRow(dataTable, out string columnError);
+			int firstDataRow = GetFirstDataRowTreatmentsDetails(dataTable, out string columnError);
 			if (firstDataRow == -1) {
 				string message = "Формат файла не соответствует заданному шаблону / не удалось найти строку с заголовками";
 				if (!string.IsNullOrEmpty(columnError))
@@ -264,12 +486,12 @@ namespace CleanedTreatmentsDetailsImport {
 				}
 			}
 
-			string fileResult = "Считано строк: " + FileContent.Rows.Count + ", ошибок: " + errorCounter;
+			string fileResult = "Считано строк: " + FileContentTreatmentsDetails.Rows.Count + ", ошибок: " + errorCounter;
 			Logging.ToLog(fileResult);
 			return fileResult;
 		}
 
-		private static int GetFirstDataRow(DataTable dataTable, out string columnError) {
+		private static int GetFirstDataRowTreatmentsDetails(DataTable dataTable, out string columnError) {
 			columnError = string.Empty;
 
 			for (int i = 0; i < dataTable.Rows.Count; i++) {
@@ -299,7 +521,7 @@ namespace CleanedTreatmentsDetailsImport {
 		}
 
 		private static void ParseRow(DataRow dataRow) {
-			DataRow dataRowParsed = FileContent.NewRow();
+			DataRow dataRowParsed = FileContentTreatmentsDetails.NewRow();
 
 			foreach (Header header in headers) {
 				string column = header.ColumnKey;
@@ -339,7 +561,7 @@ namespace CleanedTreatmentsDetailsImport {
 					dataRowParsed[header.DbField] = parsed;
 			}
 
-			FileContent.Rows.Add(dataRowParsed);
+			FileContentTreatmentsDetails.Rows.Add(dataRowParsed);
 		}
 
 		public static bool IsCompareReadedDataToDbOk(DataTable dataTableDb, 
@@ -387,12 +609,12 @@ namespace CleanedTreatmentsDetailsImport {
 
 			Dictionary<string, List<int>> contentIndexes = new Dictionary<string, List<int>>();
 			Dictionary<long, List<int>> ordtidIndexes = new Dictionary<long, List<int>>();
-			for(int i = 0; i < FileContent.Rows.Count; i++) {
-				string id = GetRowContentSearchBy(FileContent.Rows[i]);
+			for(int i = 0; i < FileContentTreatmentsDetails.Rows.Count; i++) {
+				string id = GetRowContentSearchBy(FileContentTreatmentsDetails.Rows[i]);
 				if (!contentIndexes.ContainsKey(id))
 					contentIndexes.Add(id, new List<int>());
 
-				if (long.TryParse(FileContent.Rows[i]["ordtid"].ToString(), out long ordtid)) {
+				if (long.TryParse(FileContentTreatmentsDetails.Rows[i]["ordtid"].ToString(), out long ordtid)) {
 					if (!ordtidIndexes.ContainsKey(ordtid))
 						ordtidIndexes.Add(ordtid, new List<int>());
 
@@ -402,7 +624,7 @@ namespace CleanedTreatmentsDetailsImport {
 				contentIndexes[id].Add(i);
 			}
 
-			DataTable fileContentDeleted = FileContent.Clone();
+			DataTable fileContentDeleted = FileContentTreatmentsDetails.Clone();
 
 			foreach (DataRow dataRow in dataTableDb.Rows) {
 				Console.WriteLine("Compare: dataRow: " + dataTableDb.Rows.IndexOf(dataRow));
@@ -470,7 +692,7 @@ namespace CleanedTreatmentsDetailsImport {
 
 					List<int> dataRowsFullSearch = new List<int>();
 					foreach (int item in dataRowsFullSearchRaw) {
-						DataRow rowContent = FileContent.Rows[item];
+						DataRow rowContent = FileContentTreatmentsDetails.Rows[item];
 						if (string.IsNullOrEmpty(rowContent["ordtid"].ToString()))
 							dataRowsFullSearch.Add(item);
 					}
@@ -479,8 +701,8 @@ namespace CleanedTreatmentsDetailsImport {
 						//dataRowToLoad = dataRowsFullSearch[0];
 						//int rowIndex = FileContent.Rows.IndexOf(dataRowToLoad);
 						int rowIndex = dataRowsFullSearch[0];
-						dataRowToLoad = FileContent.Rows[rowIndex];
-						FileContent.Rows[rowIndex]["ordtid"] = ordtid;
+						dataRowToLoad = FileContentTreatmentsDetails.Rows[rowIndex];
+						FileContentTreatmentsDetails.Rows[rowIndex]["ordtid"] = ordtid;
 					} else {
 						DataRow rowToDelete = fileContentDeleted.NewRow();
 						rowToDelete["ordtid"] = ordtid;
@@ -519,7 +741,7 @@ namespace CleanedTreatmentsDetailsImport {
 					isCompareOk = false;
 					continue;
 				} else
-					dataRowToLoad = FileContent.Rows[dataRowsByOrdtid[0]];
+					dataRowToLoad = FileContentTreatmentsDetails.Rows[dataRowsByOrdtid[0]];
 
 				if (dataRowToLoad != null && !string.IsNullOrEmpty(etlInsertTime)) {
 					rowsLoadedBefore++;
@@ -555,7 +777,7 @@ namespace CleanedTreatmentsDetailsImport {
 				}
 			}
 
-			DataRow[] rowsToLoadWithoutOrdtid = FileContent.Select("ordtid is null");
+			DataRow[] rowsToLoadWithoutOrdtid = FileContentTreatmentsDetails.Select("ordtid is null");
 			if (rowsToLoadWithoutOrdtid.Length > 0) {
 				string message = "Не удалось найти сопоставления загруженных строк с данными в БД";
 				Logging.ToLog(message);
@@ -583,7 +805,7 @@ namespace CleanedTreatmentsDetailsImport {
 				}
 			}
 
-			FileContent.Merge(fileContentDeleted);
+			FileContentTreatmentsDetails.Merge(fileContentDeleted);
 
 			return isCompareOk;
 		}

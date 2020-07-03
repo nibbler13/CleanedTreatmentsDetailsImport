@@ -60,6 +60,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ExcelReader.cs" />
+    <Compile Include="ItemProfitAndLoss.cs" />
     <Compile Include="Logging.cs" />
     <Compile Include="Mail.cs" />
     <Compile Include="MailSettings.cs" />
