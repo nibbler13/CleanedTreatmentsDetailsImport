@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.Remoting.Messaging;
@@ -59,8 +60,8 @@ namespace CleanedTreatmentsDetailsImport {
 			new Header("F40", "направление: должность по справочнику",                "referral_doctor_position_catalog",         typeof(string),     false),
 			new Header("F41", "направление: должность",                               "referral_doctor_position",                 typeof(string),     false),
 			new Header("F42", "№ гарантийного письма",                                "garant_letter",                            typeof(string),     false),
-			new Header("F43", "категория",                                            "category",                                 typeof(string),     false),
-			new Header("F44", "идентификатор строки (ordtid)",                        "ordtid",                                   typeof(long),       false)
+			new Header("F43", "категория",											  "category",                                 typeof(string),     false),
+			new Header("F44", "идентификатор строки (ordtid)",						  "ordtid",                                   typeof(long),       false)
 		};
 
 		private static readonly Dictionary<int, string> months = new Dictionary<int, string> {
@@ -109,8 +110,6 @@ namespace CleanedTreatmentsDetailsImport {
 				Logging.ToLog(message);
 				return;
 			}
-
-			//file, result
 			
 			try {
 				Logging.ToLog("Считывание содержимого папки для импорта: " + pathToImport);
@@ -587,10 +586,11 @@ namespace CleanedTreatmentsDetailsImport {
 				"client",
 				"etl_insert_time",
 				"file_info",
-				"loadingUserName"
+				"loadingUserName",
+				"schcount",
+				"schamount"
 			};
 
-			bool isTableHasAllRequiredColumns = true;
 			foreach (string column in requiredColumns) {
 				if (dataTableDb.Columns.Contains(column))
 					continue;
@@ -598,12 +598,8 @@ namespace CleanedTreatmentsDetailsImport {
 				if (bw != null)
 					bw.ReportProgress(0, "В таблице с данными из БД отсутсвует необходимое поле: " + column);
 
-				isTableHasAllRequiredColumns = false;
-				break;
-			}
-
-			if (!isTableHasAllRequiredColumns)
 				return false;
+			}
 
 			bool isCompareOk = true;
 
@@ -627,68 +623,22 @@ namespace CleanedTreatmentsDetailsImport {
 			DataTable fileContentDeleted = FileContentTreatmentsDetails.Clone();
 
 			foreach (DataRow dataRow in dataTableDb.Rows) {
-				Console.WriteLine("Compare: dataRow: " + dataTableDb.Rows.IndexOf(dataRow));
+				//Console.WriteLine("Compare: dataRow: " + dataTableDb.Rows.IndexOf(dataRow));
 				long ordtid = (long)dataRow["ordtid"];
-				//long treatcode = (long)dataRow["treatcode"];
-				//DateTime treatDate = (DateTime)dataRow["treat_nctrdate"];
-				//long schid = (long)dataRow["schid"];
-				//string toothnum = dataRow["tooth_name"].ToString();
-				//string patientFullName = dataRow["client"].ToString();
 				string etlInsertTime = dataRow["etl_insert_time"].ToString();
 				string fileInfo = dataRow["file_info"].ToString();
 				string loadingUserName = dataRow["loadingUserName"].ToString();
 
 				DataRow dataRowToLoad = null;
-				//DataRow[] dataRowsByOrdtid = FileContent.Select("ordtid = " + ordtid);
 				List<int> dataRowsByOrdtid = new List<int>();
 				if (ordtidIndexes.ContainsKey(ordtid))
 					dataRowsByOrdtid = ordtidIndexes[ordtid];
 
 				if (dataRowsByOrdtid.Count == 0) {
-					//string expression = "treatcode = " + treatcode +
-					//	" and treat_date = '" + treat_date + "'" +
-					//	" and patient_full_name = '" + patient_full_name + "'" +
-					//	" and toothnum " + (string.IsNullOrEmpty(toothnum) ? " is null" : " = '" + toothnum + "'") +
-					//	" and schid = " + schid +
-					//	" and ordtid is null";
-
-					//DataRow[] dataRowsFullSearch = FileContent.Select(expression);
-
-					//List<DataRow> dataRowsFullSearch = new List<DataRow>();
-					//foreach (DataRow row in FileContent.Rows) {
-					//	string treatcodeContent = row["treatcode"].ToString();
-					//	if (!treatcodeContent.Equals(treatcode.ToString()))
-					//		continue;
-
-					//	string treatDateContent = row["treat_date"].ToString();
-					//	if (!treatDateContent.Equals(treatDate.ToString()))
-					//		continue;
-
-					//	string patientFullNameContent = row["patient_full_name"].ToString();
-					//	if (!patientFullNameContent.Equals(patientFullName))
-					//		continue;
-
-					//	string toothnumContent = row["toothnum"].ToString();
-					//	if (!toothnumContent.Equals(toothnum))
-					//		continue;
-
-					//	string schidContent = row["schid"].ToString();
-					//	if (!schidContent.Equals(schid))
-					//		continue;
-
-					//	string ordtidContent = row["ordtid"].ToString();
-					//	if (!string.IsNullOrEmpty(ordtidContent))
-					//		continue;
-
-					//	dataRowsFullSearch.Add(row);
-					//}
-
 					string idDb = GetRowDbSearchBy(dataRow);
 					List<int> dataRowsFullSearchRaw = new List<int>();
-					if (contentIndexes.ContainsKey(idDb)) {
+					if (contentIndexes.ContainsKey(idDb)) 
 						dataRowsFullSearchRaw = contentIndexes[idDb];
-					}
-
 
 					List<int> dataRowsFullSearch = new List<int>();
 					foreach (int item in dataRowsFullSearchRaw) {
@@ -698,17 +648,16 @@ namespace CleanedTreatmentsDetailsImport {
 					}
 
 					if (dataRowsFullSearch.Count > 0) {
-						//dataRowToLoad = dataRowsFullSearch[0];
-						//int rowIndex = FileContent.Rows.IndexOf(dataRowToLoad);
 						int rowIndex = dataRowsFullSearch[0];
 						dataRowToLoad = FileContentTreatmentsDetails.Rows[rowIndex];
 						FileContentTreatmentsDetails.Rows[rowIndex]["ordtid"] = ordtid;
+						FileContentTreatmentsDetails.Rows[rowIndex]["amount_total"] = dataRow["schamount"];
 					} else {
 						DataRow rowToDelete = fileContentDeleted.NewRow();
 						rowToDelete["ordtid"] = ordtid;
 						rowToDelete["service_count"] = 0;
 						rowToDelete["amount_total_with_discount"] = 0;
-						//FileContent.Rows.Add(rowToDelete);
+						rowToDelete["amount_total"] = dataRow["schamount"];
 						fileContentDeleted.Rows.Add(rowToDelete);
 
 						rowsToDelete++;
@@ -746,6 +695,7 @@ namespace CleanedTreatmentsDetailsImport {
 				if (dataRowToLoad != null && !string.IsNullOrEmpty(etlInsertTime)) {
 					rowsLoadedBefore++;
 					isCompareOk = false;
+					Console.WriteLine("rowsLoadedBefore: " + dataRowToLoad.ItemArray[43].ToString());
 
 					if (rowsLoadedBefore == 10) {
 						string messageSkip = "Имеется более 10 подобных строк, пропуск дальнейшего отображения";
@@ -809,6 +759,59 @@ namespace CleanedTreatmentsDetailsImport {
 
 			return isCompareOk;
 		}
+
+		public static void ApplyAverageDiscount(DataTable dataTableDb, BackgroundWorker bw = null) {
+			if (dataTableDb == null) {
+				if (bw != null)
+					bw.ReportProgress(0, "Таблица с данными из БД не задана, пропуск");
+
+				return;
+			}
+
+			if (!dataTableDb.Columns.Contains("schamount") ||
+				!dataTableDb.Columns.Contains("ordtid")) {
+				if (bw != null)
+					bw.ReportProgress(0, "");
+
+				return;
+			}
+
+			double amountTotalDB = 0;
+            foreach (DataRow row in dataTableDb.Rows)
+				amountTotalDB += double.Parse(row["schamount"].ToString());
+
+			if (bw != null)
+				bw.ReportProgress(0, "Стоимость услуг в БД: " + amountTotalDB.ToString("N", CultureInfo.CurrentCulture));
+
+			double amountTotalWithDiscount = 0;
+			foreach (DataRow row in FileContentTreatmentsDetails.Rows)
+				amountTotalWithDiscount += (float)row["amount_total_with_discount"];
+
+			if (bw != null)
+				bw.ReportProgress(0, "Стоимость услуг со скидкой в загруженном файле: " + amountTotalWithDiscount.ToString("N", CultureInfo.CurrentCulture));
+
+			double averageDiscount = (amountTotalDB - amountTotalWithDiscount) / amountTotalDB;
+			if (bw != null)
+				bw.ReportProgress(0, "Общая сумма снятий: " + (amountTotalDB - amountTotalWithDiscount).ToString("N", CultureInfo.CurrentCulture) + 
+					", процент снятий: " + averageDiscount.ToString("P", CultureInfo.CurrentCulture));
+
+			FileContentTreatmentsDetails.Columns.Add(new DataColumn("average_discount", typeof(float)));
+			FileContentTreatmentsDetails.Columns.Add(new DataColumn("amount_total_with_average_discount", typeof(float)));
+
+			double amountTotalWithAverageDiscount = 0;
+            foreach (DataRow row in FileContentTreatmentsDetails.Rows) {
+				row["average_discount"] = averageDiscount;
+				row["amount_total_with_average_discount"] = (float)row["amount_total"] * (1.0d - averageDiscount);
+				amountTotalWithAverageDiscount += (float)row["amount_total_with_average_discount"];
+			}
+
+			if (bw != null)
+				bw.ReportProgress(0, "Сумма услуг в БД с распределенной скидкой: " + amountTotalWithAverageDiscount.ToString("N", CultureInfo.CurrentCulture));
+
+			if (bw != null)
+				bw.ReportProgress(0, "Расхождение распределенной средней скидки: " + 
+					(amountTotalWithDiscount - amountTotalWithAverageDiscount).ToString("N", CultureInfo.CurrentCulture));
+        }
 
 		private static string GetRowContentSearchBy(DataRow row) {
 			return row["treatcode"].ToString() +

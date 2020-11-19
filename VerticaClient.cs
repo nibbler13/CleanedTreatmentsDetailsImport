@@ -116,6 +116,16 @@ namespace CleanedTreatmentsDetailsImport {
 								update.Parameters.Add(new VerticaParameter("@file_info", fileInfo));
 								update.Parameters.Add(new VerticaParameter("@loadingUserName", Environment.UserName + "@" + Environment.MachineName));
 
+								if (dataTable.Columns.Contains("average_discount"))
+									update.Parameters.Add(new VerticaParameter("@average_discount", dataTable.Rows[i]["average_discount"]));
+								else
+									update.Parameters.Add(new VerticaParameter("@average_discount", null));
+
+								if (dataTable.Columns.Contains("amount_total_with_average_discount"))
+									update.Parameters.Add(new VerticaParameter("@amount_total_with_average_discount", dataTable.Rows[i]["amount_total_with_average_discount"]));
+								else
+									update.Parameters.Add(new VerticaParameter("@amount_total_with_average_discount", null));
+
 								if (update.ExecuteNonQuery() == 0)
 									updatedCorrected = false;
 							} catch (Exception e) {
